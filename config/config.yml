@@ -1,0 +1,7 @@
+inventory:
+  plugin: YAMLInventory
+  options:
+    host_file: "config/hosts.yml"
+    defaults_file: "config/defaults.yml"
+logging:
+  enabled: False
