@@ -13,7 +13,7 @@ $ pipenv install
 
 対象機器一覧を`config/hosts.yml`ファイルに記載する
 ```
-$ cat << EOL > hosts.yml
+$ cat << EOL > config/hosts.yml
 iosxrv1:
     hostname: 192.168.1.1
 iosxrv2:
@@ -45,5 +45,5 @@ EOL
 ツール起動し一括取得する。エラーが発生した場合は途中で停止する
 ```
 $ export USERINFO=<login_username:<login_password> FTP_USERNAME=<ftp_username> FTP_PASSWORD=<ftp_password>
-$ pipenv run python provision.py ftp_mget ftp_mget.py
+$ pipenv run python provision.py ftp_mget mget.yml
 ```

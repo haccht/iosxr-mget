@@ -7,7 +7,7 @@ from urllib.parse import urlparse
 
 from fire import Fire
 from nornir import InitNornir
-from nornir.core.task import Task, Result, MultiResult
+from nornir.core.task import Result
 from nornir_scrapli.tasks import send_command, send_interactive, get_prompt
 from nornir_utils.plugins.functions import print_result
 
@@ -21,12 +21,12 @@ def ftp_get_sync(task, ftp_url, local_path, digest=None, vrf=None, ftp_username=
     if digest is not None:
         task.run(task=md5sum, path=local_path, digest=digest)
 
-    if sby_rsp is not None:
+    if act_rsp is not None and sby_rsp is not None:
         task.run(task=copy, src_path=local_path, dst_path=local_path, src_location=act_rsp, dst_location=sby_rsp)
         if digest is not None:
             task.run(task=md5sum, path=local_path, location=sby_rsp, digest=digest)
 
-def ftp_get(task, ftp_url, local_path, location=None, digest=None, vrf=None, ftp_username=None, ftp_password=None):
+def ftp_get(task, ftp_url, local_path, location=None, vrf=None, ftp_username=None, ftp_password=None):
     uri = urlparse(ftp_url)
     if uri.scheme != 'ftp':
         raise Exception(f"Failed to parse URL: {ftp_url}")
@@ -48,7 +48,7 @@ def ftp_get(task, ftp_url, local_path, location=None, digest=None, vrf=None, ftp
             (uri.path.strip('/'), "]?", False),
             ("", _prompt(task), False)]
 
-    resp = task.run(task=send_interactive, interact_events=events, timeout_ops=30, severity_level=logging.DEBUG)
+    resp = task.run(task=send_interactive, interact_events=events, timeout_ops=0, severity_level=logging.DEBUG)
     return Result(host=task.host, result=resp.result.result, failed='%Error' in resp.result.result)
 
 def ftp_put(task, ftp_url, local_path, location=None, vrf=None, ftp_username=None, ftp_password=None):
@@ -69,7 +69,7 @@ def ftp_put(task, ftp_url, local_path, location=None, vrf=None, ftp_username=Non
             (ftp_password or uri.password or "", "]?", True),
             (uri.path.strip('/'), _prompt(task), False)]
 
-    resp = task.run(task=send_interactive, interact_events=events, timeout_ops=30, severity_level=logging.DEBUG)
+    resp = task.run(task=send_interactive, interact_events=events, timeout_ops=0, severity_level=logging.DEBUG)
     return Result(host=task.host, result=resp.result.result, failed='%Error' in resp.result.result, changed=False)
 
 def copy(task, src_path, dst_path, src_location=None, dst_location=None):
@@ -84,7 +84,7 @@ def copy(task, src_path, dst_path, src_location=None, dst_location=None):
             (command, "]?", False),
             ("", _prompt(task), False)]
 
-    resp = task.run(task=send_interactive, interact_events=events, timeout_ops=30, severity_level=logging.INFO)
+    resp = task.run(task=send_interactive, interact_events=events, timeout_ops=0, severity_level=logging.INFO)
     return Result(host=task.host, result=resp.result.result, failed='%Error' in resp.result.result)
 
 def md5sum(task, path, digest, location=None):
@@ -93,7 +93,7 @@ def md5sum(task, path, digest, location=None):
     else:
         command = f"sam verify net/node{location.replace('/', '_')}/{path} md5 {digest}"
 
-    resp = task.run(task=send_command, command=command, severity_level=logging.DEBUG)
+    resp = task.run(task=send_command, command=command, timeout_ops=0, severity_level=logging.DEBUG)
     return Result(host=task.host, result=resp.result, failed=not 'Same digest values' in resp.result, changed=False)
 
 def mkdir(task, path, location=None):
@@ -118,8 +118,7 @@ def _mkdir(task, path, location=None):
                 ("", _prompt(task), False)]
 
     resp = task.run(task=send_interactive, interact_events=events, severity_level=logging.DEBUG)
-    failed = '%Error' in resp.result.result
-    return Result(host=task.host, result=resp.result.result, failed=failed, changed=not failed)
+    return Result(host=task.host, result=resp.result.result, failed='%Error' in resp.result.result)
 
 def delete(task, path, location=None):
     command = "dir {}".format(path if location is None else f"{path} location {location}")
@@ -135,8 +134,7 @@ def delete(task, path, location=None):
                 ("", _prompt(task), False)]
 
     resp = task.run(task=send_interactive, interact_events=events, severity_level=logging.DEBUG)
-    failed = '%Error' in resp.result.result
-    return Result(host=task.host, result=resp.result.result, failed=failed, changed=not failed)
+    return Result(host=task.host, result=resp.result.result, failed='%Error' in resp.result.result)
 
 def rmdir(task, path, location=None):
     command = "rmdir {}".format(path if location is None else f"{path} location {location}")
@@ -144,12 +142,10 @@ def rmdir(task, path, location=None):
     events = [
                 (command, "]?", False),
                 ("", "[confirm]", False),
-                ("", _prompt(task), False),
-            ]
+                ("", _prompt(task), False)]
 
     resp = task.run(task=send_interactive, interact_events=events, severity_level=logging.DEBUG)
-    failed = bool(re.search('%Error', resp.result.result))
-    return Result(host=task.host, result=resp.result.result, failed=failed, changed=not failed)
+    return Result(host=task.host, result=resp.result.result, failed='%Error' in resp.result.result)
 
 def _platform(task):
     resp = task.run(task=send_command, command='show platform', severity_level=logging.DEBUG)
