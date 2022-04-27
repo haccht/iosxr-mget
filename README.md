@@ -5,8 +5,8 @@ Cisco IOS-XR装置にFTPサーバーからファイルをダウンロードす�
 
 環境構築
 ```
-$ git clone https://github.com/haccht/iosxr-ftp-mget.git
-$ cd iosxr-ftp-mget
+$ git clone https://github.com/haccht/iosxr-mget.git
+$ cd iosxr-mget
 $ pipenv --python 3.9
 $ pipenv install
 ```
