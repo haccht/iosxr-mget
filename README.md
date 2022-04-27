@@ -25,7 +25,7 @@ EOL
 RSP冗長構成の場合は冗長側RSPにもファイルを自動コピーする
 ```
 $ export USERINFO=<login_username:<login_password> FTP_USERNAME=<ftp_username> FTP_PASSWORD=<ftp_password>
-$ pipenv run python provision.py ftp_get ftp://<address>/path/to/file usb:/path/to/file
+$ pipenv run python provision.py get ftp://<address>/path/to/file usb:/path/to/file
 ```
 
 複数ファイルを一括取得する方法  
@@ -33,10 +33,10 @@ $ pipenv run python provision.py ftp_get ftp://<address>/path/to/file usb:/path/
 `digest`を指定すると取得したファイルのmd5ハッシュ値の整合性チェックを併せて行う
 ```
 $ cat << EOL > mget.yml
-- ftp_url: ftp://<address>/path/to/file1
+- url: ftp://<address>/path/to/file1
   local_path: usb:/path/to/file1
   digest: xxxxxxxxxxxx
-- ftp_url: ftp://<address>/path/to/file2
+- url: ftp://<address>/path/to/file2
   local_path: usb:/path/to/file2
   digest: yyyyyyyyyyyy
 EOL
@@ -45,5 +45,5 @@ EOL
 ツール起動し一括取得する。エラーが発生した場合は途中で停止する
 ```
 $ export USERINFO=<login_username:<login_password> FTP_USERNAME=<ftp_username> FTP_PASSWORD=<ftp_password>
-$ pipenv run python provision.py ftp_mget mget.yml
+$ pipenv run python provision.py mget mget.yml
 ```

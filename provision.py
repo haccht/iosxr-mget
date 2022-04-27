@@ -12,12 +12,19 @@ from nornir_scrapli.tasks import send_command, send_interactive, get_prompt
 from nornir_utils.plugins.functions import print_result
 
 
-def ftp_get_sync(task, ftp_url, local_path, digest=None, vrf=None, ftp_username=None, ftp_password=None):
+def download(task, url, local_path, digest=None, vrf=None, ftp_username=None, ftp_password=None):
     platforms = _platform(task)
     act_rsp = next((n['node'] for n in platforms if n['type'].startswith('A9K-RSP') and n['type'].endswith('(Active)')),  None)
     sby_rsp = next((n['node'] for n in platforms if n['type'].startswith('A9K-RSP') and n['type'].endswith('(Standby)')), None)
 
-    task.run(task=ftp_get, ftp_url=ftp_url, local_path=local_path, vrf=vrf, ftp_username=ftp_username, ftp_password=ftp_password)
+    uri = urlparse(url)
+    if uri.scheme == 'ftp':
+        task.run(task=_ftp_get,  uri=uri, local_path=local_path, vrf=None, ftp_username=None, ftp_password=None)
+    elif uri.scheme == 'tftp':
+        task.run(task=_tftp_get, uri=uri, local_path=local_path, vrf=None)
+    else:
+       raise Exception(f"Failed to parse URL: {url}")
+
     if digest is not None:
         task.run(task=md5sum, path=local_path, digest=digest)
 
@@ -26,11 +33,7 @@ def ftp_get_sync(task, ftp_url, local_path, digest=None, vrf=None, ftp_username=
         if digest is not None:
             task.run(task=md5sum, path=local_path, location=sby_rsp, digest=digest)
 
-def ftp_get(task, ftp_url, local_path, location=None, vrf=None, ftp_username=None, ftp_password=None):
-    uri = urlparse(ftp_url)
-    if uri.scheme != 'ftp':
-        raise Exception(f"Failed to parse URL: {ftp_url}")
-
+def _ftp_get(task, uri, local_path, location=None, vrf=None, ftp_username=None, ftp_password=None):
     task.run(task=mkdir, path=os.path.dirname(local_path), location=location)
     task.run(task=delete, path=local_path, location=location)
 
@@ -51,11 +54,35 @@ def ftp_get(task, ftp_url, local_path, location=None, vrf=None, ftp_username=Non
     resp = task.run(task=send_interactive, interact_events=events, timeout_ops=0, severity_level=logging.DEBUG)
     return Result(host=task.host, result=resp.result.result, failed='%Error' in resp.result.result)
 
-def ftp_put(task, ftp_url, local_path, location=None, vrf=None, ftp_username=None, ftp_password=None):
-    uri = urlparse(ftp_url)
-    if uri.scheme != 'ftp':
-        raise Exception(f"Failed to parse URL: {ftp_url}")
+def _tftp_get(task, uri, local_path, location=None, vrf=None):
+    task.run(task=mkdir, path=os.path.dirname(local_path), location=location)
+    task.run(task=delete, path=local_path, location=location)
 
+    address = uri.hostname if uri.port is None else f"{uri.hostname}:{uri.port}"
+    command = "copy {}: {} vrf {}".format(
+            uri.scheme,
+            local_path if location is None else f"{local_path} location {location}",
+            vrf or 'default')
+
+    events = [
+            (command, "]?", False),
+            (address, "]?", False),
+            (uri.path.strip('/'), "]?", False),
+            ("", _prompt(task), False)]
+
+    resp = task.run(task=send_interactive, interact_events=events, timeout_ops=0, severity_level=logging.DEBUG)
+    return Result(host=task.host, result=resp.result.result, failed='%Error' in resp.result.result)
+
+def upload(task, url, local_path, digest=None, vrf=None, ftp_username=None, ftp_password=None):
+    uri = urlparse(url)
+    if uri.scheme == 'ftp':
+        task.run(task=_ftp_put,  uri=uri, local_path=local_path, vrf=None, ftp_username=None, ftp_password=None)
+    elif uri.scheme == 'tftp':
+        task.run(task=_tftp_put, uri=uri, local_path=local_path, vrf=None)
+    else:
+       raise Exception(f"Failed to parse URL: {url}")
+
+def _ftp_put(task, uri, local_path, location=None, vrf=None, ftp_username=None, ftp_password=None):
     address = uri.hostname if uri.port is None else f"{uri.hostname}:{uri.port}"
     command = "copy {} {}: vrf {}".format(
             local_path if location is None else f"{local_path} location {location}",
@@ -67,6 +94,21 @@ def ftp_put(task, ftp_url, local_path, location=None, vrf=None, ftp_username=Non
             (address, "]?", False),
             (ftp_username or uri.username or "", "password: ", False),
             (ftp_password or uri.password or "", "]?", True),
+            (uri.path.strip('/'), _prompt(task), False)]
+
+    resp = task.run(task=send_interactive, interact_events=events, timeout_ops=0, severity_level=logging.DEBUG)
+    return Result(host=task.host, result=resp.result.result, failed='%Error' in resp.result.result, changed=False)
+
+def _tftp_put(task, uri, local_path, location=None, vrf=None):
+    address = uri.hostname if uri.port is None else f"{uri.hostname}:{uri.port}"
+    command = "copy {} {}: vrf {}".format(
+            local_path if location is None else f"{local_path} location {location}",
+            uri.scheme,
+            vrf or 'default')
+
+    events = [
+            (command, "]?", False),
+            (address, "]?", False),
             (uri.path.strip('/'), _prompt(task), False)]
 
     resp = task.run(task=send_interactive, interact_events=events, timeout_ops=0, severity_level=logging.DEBUG)
@@ -174,38 +216,38 @@ class NornirCLI:
         if resp.failed:
             sys.exit(1)
 
-    def ftp_mget(self, config, ftp_username=None, ftp_password=None):
-        with open(config) as file:
+    def mget(self, config_file, ftp_username=None, ftp_password=None):
+        with open(config_file) as file:
             for item in yaml.safe_load(file):
                 print()
-                self.ftp_get(
-                        item.get('ftp_url'),
+                self.get(
+                        item.get('url'),
                         item.get('local_path'),
                         digest=item.get('digest'),
                         vrf=item.get('vrf'),
                         ftp_username=ftp_username,
                         ftp_password=ftp_password)
 
-    def ftp_get(self, ftp_url, local_path, digest=None, vrf='default', ftp_username=None, ftp_password=None):
+    def get(self, url, local_path, digest=None, vrf='default', ftp_username=None, ftp_password=None):
         ftp_username = ftp_username or os.environ.get('FTP_USERNAME')
         ftp_password = ftp_password or os.environ.get('FTP_PASSWORD')
         self._exit(self._nr.run(
-            name=f"download from '{ftp_url}' to '{local_path}'...",
-            task=ftp_get_sync,
-            ftp_url=ftp_url,
+            name=f"download from '{url}' to '{local_path}'...",
+            task=download,
+            url=url,
             local_path=local_path,
             digest=digest,
             vrf=vrf,
             ftp_username=ftp_username,
             ftp_password=ftp_password))
 
-    def ftp_put(self, ftp_url, local_path, location=None, vrf="default", ftp_username=None, ftp_password=None):
+    def put(self, url, local_path, location=None, vrf="default", ftp_username=None, ftp_password=None):
         ftp_username = ftp_username or os.environ.get('FTP_USERNAME')
         ftp_password = ftp_password or os.environ.get('FTP_PASSWORD')
         self._exit(self._nr.run(
-            name=f"upload from '{local_path}' to '{ftp_url}'...",
-            task=ftp_put,
-            ftp_url=ftp_url,
+            name=f"upload from '{local_path}' to '{url}'...",
+            task=upload,
+            url=url,
             local_path=local_path,
             location=location,
             vrf=vrf,
