@@ -12,63 +12,62 @@ from nornir_scrapli.tasks import send_command, send_interactive, get_prompt
 from nornir_utils.plugins.functions import print_result
 
 
-def download(task, url, local_path, digest=None, vrf=None, ftp_username=None, ftp_password=None):
+def download(task, url, local_path, digest=None, vrf=None, ftp_username=None, ftp_password=None, force=False):
     platforms = _platform(task)
     act_rsp = next((n['node'] for n in platforms if n['type'].startswith('A9K-RSP') and n['type'].endswith('(Active)')),  None)
     sby_rsp = next((n['node'] for n in platforms if n['type'].startswith('A9K-RSP') and n['type'].endswith('(Standby)')), None)
 
     uri = urlparse(url)
     if uri.scheme == 'ftp':
-        task.run(task=_ftp_get,  uri=uri, local_path=local_path, vrf=None, ftp_username=None, ftp_password=None)
+        task.run(task=_ftp_get,  uri=uri, local_path=local_path, vrf=vrf, ftp_username=ftp_username, ftp_password=ftp_password, force=force)
     elif uri.scheme == 'tftp':
-        task.run(task=_tftp_get, uri=uri, local_path=local_path, vrf=None)
+        task.run(task=_tftp_get, uri=uri, local_path=local_path, vrf=vrf, force=force)
     else:
        raise Exception(f"Failed to parse URL: {url}")
 
     if digest is not None:
-        task.run(task=md5sum, path=local_path, digest=digest)
+        task.run(task=md5sum, local_path=local_path, digest=digest)
 
     if act_rsp is not None and sby_rsp is not None:
-        task.run(task=copy, src_path=local_path, dst_path=local_path, src_location=act_rsp, dst_location=sby_rsp)
-        if digest is not None:
-            task.run(task=md5sum, path=local_path, location=sby_rsp, digest=digest)
+        task.run(task=copy, src_path=local_path, dst_path=local_path, src_location=act_rsp, dst_location=sby_rsp, force=force)
 
-def _ftp_get(task, uri, local_path, location=None, vrf=None, ftp_username=None, ftp_password=None):
-    task.run(task=mkdir, path=os.path.dirname(local_path), location=location)
-    task.run(task=delete, path=local_path, location=location)
+        if digest is not None:
+            task.run(task=md5sum, local_path=local_path, location=sby_rsp, digest=digest)
+
+def _ftp_get(task, uri, local_path, location=None, vrf=None, ftp_username=None, ftp_password=None, force=False):
+    if not _path_overwrite(task, local_path=local_path, location=location, force=force):
+        return Result(host=task.host, result=None, failed=False, changed=False)
 
     address = uri.hostname if uri.port is None else f"{uri.hostname}:{uri.port}"
     command = "copy {}: {} vrf {}".format(
-            uri.scheme,
-            local_path if location is None else f"{local_path} location {location}",
-            vrf or 'default')
-
+        uri.scheme,
+        local_path if location is None else f"{local_path} location {location}",
+        vrf or 'default')
     events = [
-            (command, "]?", False),
-            (address, "]?", False),
-            (ftp_username or uri.username or "", "password: ", False),
-            (ftp_password or uri.password or "", "]?", True),
-            (uri.path.strip('/'), "]?", False),
-            ("", _prompt(task), False)]
+        (command, "]?", False),
+        (address, "]?", False),
+        (ftp_username or uri.username or "", "password: ", False),
+        (ftp_password or uri.password or "", "]?", True),
+        (uri.path.strip('/'), "]?", False),
+        ("", _prompt(task), False)]
 
     resp = task.run(task=send_interactive, interact_events=events, timeout_ops=0, severity_level=logging.DEBUG)
     return Result(host=task.host, result=resp.result.result, failed='%Error' in resp.result.result)
 
-def _tftp_get(task, uri, local_path, location=None, vrf=None):
-    task.run(task=mkdir, path=os.path.dirname(local_path), location=location)
-    task.run(task=delete, path=local_path, location=location)
+def _tftp_get(task, uri, local_path, location=None, vrf=None, force=False):
+    if not _path_overwrite(task, local_path=local_path, location=location, force=force):
+        return Result(host=task.host, result=None, failed=False, changed=False)
 
     address = uri.hostname if uri.port is None else f"{uri.hostname}:{uri.port}"
     command = "copy {}: {} vrf {}".format(
-            uri.scheme,
-            local_path if location is None else f"{local_path} location {location}",
-            vrf or 'default')
-
+        uri.scheme,
+        local_path if location is None else f"{local_path} location {location}",
+        vrf or 'default')
     events = [
-            (command, "]?", False),
-            (address, "]?", False),
-            (uri.path.strip('/'), "]?", False),
-            ("", _prompt(task), False)]
+        (command, "]?", False),
+        (address, "]?", False),
+        (uri.path.strip('/'), "]?", False),
+        ("", _prompt(task), False)]
 
     resp = task.run(task=send_interactive, interact_events=events, timeout_ops=0, severity_level=logging.DEBUG)
     return Result(host=task.host, result=resp.result.result, failed='%Error' in resp.result.result)
@@ -85,16 +84,15 @@ def upload(task, url, local_path, digest=None, vrf=None, ftp_username=None, ftp_
 def _ftp_put(task, uri, local_path, location=None, vrf=None, ftp_username=None, ftp_password=None):
     address = uri.hostname if uri.port is None else f"{uri.hostname}:{uri.port}"
     command = "copy {} {}: vrf {}".format(
-            local_path if location is None else f"{local_path} location {location}",
-            uri.scheme,
-            vrf or 'default')
-
+        local_path if location is None else f"{local_path} location {location}",
+        uri.scheme,
+        vrf or 'default')
     events = [
-            (command, "]?", False),
-            (address, "]?", False),
-            (ftp_username or uri.username or "", "password: ", False),
-            (ftp_password or uri.password or "", "]?", True),
-            (uri.path.strip('/'), _prompt(task), False)]
+        (command, "]?", False),
+        (address, "]?", False),
+        (ftp_username or uri.username or "", "password: ", False),
+        (ftp_password or uri.password or "", "]?", True),
+        (uri.path.strip('/'), _prompt(task), False)]
 
     resp = task.run(task=send_interactive, interact_events=events, timeout_ops=0, severity_level=logging.DEBUG)
     return Result(host=task.host, result=resp.result.result, failed='%Error' in resp.result.result, changed=False)
@@ -102,106 +100,116 @@ def _ftp_put(task, uri, local_path, location=None, vrf=None, ftp_username=None, 
 def _tftp_put(task, uri, local_path, location=None, vrf=None):
     address = uri.hostname if uri.port is None else f"{uri.hostname}:{uri.port}"
     command = "copy {} {}: vrf {}".format(
-            local_path if location is None else f"{local_path} location {location}",
-            uri.scheme,
-            vrf or 'default')
-
+        local_path if location is None else f"{local_path} location {location}",
+        uri.scheme,
+        vrf or 'default')
     events = [
-            (command, "]?", False),
-            (address, "]?", False),
-            (uri.path.strip('/'), _prompt(task), False)]
+        (command, "]?", False),
+        (address, "]?", False),
+        (uri.path.strip('/'), _prompt(task), False)]
 
     resp = task.run(task=send_interactive, interact_events=events, timeout_ops=0, severity_level=logging.DEBUG)
     return Result(host=task.host, result=resp.result.result, failed='%Error' in resp.result.result, changed=False)
 
-def copy(task, src_path, dst_path, src_location=None, dst_location=None):
-    task.run(task=mkdir, path=os.path.dirname(dst_path), location=dst_location)
-    task.run(task=delete, path=dst_path, location=dst_location)
+def copy(task, src_path, dst_path, src_location=None, dst_location=None, override=False, force=False):
+    if not _path_overwrite(task, local_path=dst_path, location=dst_location, force=force):
+        return Result(host=task.host, result=None, failed=False, changed=False)
 
     command = "copy {} {}".format(
-            src_path if src_location is None else f"{src_path} location {src_location}",
-            dst_path if dst_location is None else f"{dst_path} location {dst_location}")
-
+        src_path if src_location is None else f"{src_path} location {src_location}",
+        dst_path if dst_location is None else f"{dst_path} location {dst_location}")
     events = [
-            (command, "]?", False),
-            ("", _prompt(task), False)]
+        (command, "]?", False),
+        ("", _prompt(task), False)]
 
     resp = task.run(task=send_interactive, interact_events=events, timeout_ops=0, severity_level=logging.INFO)
     return Result(host=task.host, result=resp.result.result, failed='%Error' in resp.result.result)
 
-def md5sum(task, path, digest, location=None):
+def md5sum(task, local_path, digest, location=None):
     if location is None:
-        command = f"sam verify {path} md5 {digest}"
+        command = f"sam verify {local_path} md5 {digest}"
     else:
-        command = f"sam verify net/node{location.replace('/', '_')}/{path} md5 {digest}"
+        command = f"sam verify net/node{location.replace('/', '_')}/{local_path} md5 {digest}"
 
     resp = task.run(task=send_command, command=command, timeout_ops=0, severity_level=logging.DEBUG)
     return Result(host=task.host, result=resp.result, failed=not 'Same digest values' in resp.result, changed=False)
 
-def mkdir(task, path, location=None):
-    head, tail = os.path.split(path)
+def mkdir(task, local_path, location=None):
+    head, tail = os.path.split(local_path)
     if not head and tail:
         pass
     else:
-        task.run(task=mkdir,  path=head, location=location)
-        task.run(task=_mkdir, path=path, location=location)
+        task.run(task=mkdir,  local_path=head,       location=location)
+        task.run(task=_mkdir, local_path=local_path, location=location)
 
-def _mkdir(task, path, location=None):
-    command = "dir {}".format(path if location is None else f"{path} location {location}")
-
-    resp = task.run(task=send_command, command=command, severity_level=logging.DEBUG)
-    if not 'No such file or directory' in resp.result:
+def _mkdir(task, local_path, location=None):
+    if _path_exist(task, local_path=local_path, location=location):
         return Result(host=task.host, result=None, failed=False, changed=False)
 
-    command = "mkdir {}".format(path if location is None else f"{path} location {location}")
-
+    command = "mkdir {}".format(local_path if location is None else f"{local_path} location {location}")
     events = [
-                (command, "]?", False),
-                ("", _prompt(task), False)]
+        (command, "]?", False),
+        ("", _prompt(task), False)]
 
     resp = task.run(task=send_interactive, interact_events=events, severity_level=logging.DEBUG)
     return Result(host=task.host, result=resp.result.result, failed='%Error' in resp.result.result)
 
-def delete(task, path, location=None):
-    command = "dir {}".format(path if location is None else f"{path} location {location}")
-
-    resp = task.run(task=send_command, command=command, severity_level=logging.DEBUG)
-    if 'No such file or directory' in resp.result:
+def delete(task, local_path, location=None):
+    if not _path_exist(task, local_path=local_path, location=location):
         return Result(host=task.host, result=None, failed=False, changed=False)
 
-    command = "delete {}".format(path if location is None else f"{path} location {location}")
-
+    command = "delete {}".format(local_path if location is None else f"{local_path} location {location}")
     events = [
-                (command, "[confirm]", False),
-                ("", _prompt(task), False)]
+        (command, "[confirm]", False),
+        ("", _prompt(task), False)]
 
     resp = task.run(task=send_interactive, interact_events=events, severity_level=logging.DEBUG)
     return Result(host=task.host, result=resp.result.result, failed='%Error' in resp.result.result)
 
-def rmdir(task, path, location=None):
-    command = "rmdir {}".format(path if location is None else f"{path} location {location}")
-
+def rmdir(task, local_path, location=None):
+    command = "rmdir {}".format(local_path if location is None else f"{local_path} location {location}")
     events = [
-                (command, "]?", False),
-                ("", "[confirm]", False),
-                ("", _prompt(task), False)]
+        (command, "]?", False),
+        ("", "[confirm]", False),
+        ("", _prompt(task), False)]
 
     resp = task.run(task=send_interactive, interact_events=events, severity_level=logging.DEBUG)
     return Result(host=task.host, result=resp.result.result, failed='%Error' in resp.result.result)
-
-def _platform(task):
-    resp = task.run(task=send_command, command='show platform', severity_level=logging.DEBUG)
-    return resp.scrapli_response.textfsm_parse_output(template='textfsm/cisco_xr_admin_show_platform.textfsm')
 
 def _prompt(task):
     resp = task.run(task=get_prompt, severity_level=logging.DEBUG)
     return resp.result
 
+def _platform(task):
+    resp = task.run(task=send_command, command='show platform', severity_level=logging.DEBUG)
+    return resp.scrapli_response.textfsm_parse_output(template='textfsm/cisco_xr_admin_show_platform.textfsm')
+
+def _path_exist(task, local_path, location=None):
+    command = "dir {}".format(local_path if location is None else f"{local_path} location {location}")
+    resp = task.run(task=send_command, command=command, severity_level=logging.DEBUG)
+    return not ('No such file or directory' in resp.result or 'No such node' in resp.result)
+
+def _path_overwrite(task, local_path, location=None, force=False):
+    if _path_exist(task, local_path=local_path, location=location):
+        if force:
+            task.run(task=delete, local_path=local_path, location=location)
+        else:
+            return False
+    else:
+        task.run(task=mkdir, local_path=os.path.dirname(local_path), location=location)
+    return True
+
 
 class NornirCLI:
-    def __init__(self, config='config/config.yml', severity=logging.INFO, host=None):
-        self._nr = InitNornir(config_file=config)
+    def __init__(self, config='config/config.yml', severity=logging.INFO, jobs=10, host=None):
+        self._nr = InitNornir(
+            config_file=config,
+            runner={
+              "plugin": "threaded",
+              "options": { "num_workers": jobs }
+            })
         self._severity_level = severity
+
         if host is not None:
             self._nr = self._nr.filter(name=host)
 
@@ -211,27 +219,39 @@ class NornirCLI:
                 v.username = userinfo[0]
                 v.password = userinfo[1]
 
-    def _exit(self, resp):
-        print_result(resp, severity_level=self._severity_level)
-        if resp.failed:
+    def _W(self, result, display_result=True):
+        if display_result:
+            print_result(result, severity_level=self._severity_level)
+        if result.failed:
+            print(f"Failed at {list(result.failed_hosts.keys())}")
             sys.exit(1)
 
-    def mget(self, config_file, ftp_username=None, ftp_password=None):
-        with open(config_file) as file:
-            for item in yaml.safe_load(file):
-                print()
-                self.get(
-                        item.get('url'),
-                        item.get('local_path'),
-                        digest=item.get('digest'),
-                        vrf=item.get('vrf'),
-                        ftp_username=ftp_username,
-                        ftp_password=ftp_password)
+    def mget(self, config_file, ftp_username=None, ftp_password=None, force=False):
+        def _mget(task, items):
+            for item in items:
+                url = item.get('url')
+                local_path = item.get('local_path')
+                ftp_username = item.get('ftp_username') or os.environ.get('FTP_USERNAME')
+                ftp_password = item.get('ftp_password') or os.environ.get('FTP_PASSWORD')
+                resp = task.run(
+                    name=f"download from '{url}' to '{local_path}'...",
+                    task=download,
+                    url=url,
+                    local_path=local_path,
+                    digest=item.get('digest'),
+                    vrf=item.get('vrf'),
+                    ftp_username=ftp_username,
+                    ftp_password=ftp_password,
+                    force=force)
+                print_result(resp, severity_level=self._severity_level)
 
-    def get(self, url, local_path, digest=None, vrf='default', ftp_username=None, ftp_password=None):
+        with open(config_file) as file:
+            self._W(self._nr.run(task=_mget, items=yaml.safe_load(file)), display_result=False)
+
+    def get(self, url, local_path, digest=None, vrf='default', ftp_username=None, ftp_password=None, force=False):
         ftp_username = ftp_username or os.environ.get('FTP_USERNAME')
         ftp_password = ftp_password or os.environ.get('FTP_PASSWORD')
-        self._exit(self._nr.run(
+        self._W(self._nr.run(
             name=f"download from '{url}' to '{local_path}'...",
             task=download,
             url=url,
@@ -239,12 +259,13 @@ class NornirCLI:
             digest=digest,
             vrf=vrf,
             ftp_username=ftp_username,
-            ftp_password=ftp_password))
+            ftp_password=ftp_password,
+            force=force))
 
     def put(self, url, local_path, location=None, vrf="default", ftp_username=None, ftp_password=None):
         ftp_username = ftp_username or os.environ.get('FTP_USERNAME')
         ftp_password = ftp_password or os.environ.get('FTP_PASSWORD')
-        self._exit(self._nr.run(
+        self._W(self._nr.run(
             name=f"upload from '{local_path}' to '{url}'...",
             task=upload,
             url=url,
@@ -254,39 +275,40 @@ class NornirCLI:
             ftp_username=ftp_username,
             ftp_password=ftp_password))
 
-    def copy(self, src_path, dst_path, src_location=None, dst_location=None, digest=None):
-        self._exit(self._nr.run(
+    def copy(self, src_path, dst_path, src_location=None, dst_location=None, digest=None, force=False):
+        self._W(self._nr.run(
             name=f"copy from '{src_path}' to '{dst_path}'...",
             task=copy,
             src_path=src_path,
             dst_path=dst_path,
             src_location=src_location,
             dst_location=dst_location,
-            digest=digest))
+            digest=digest,
+            force=force))
 
     def md5sum(self, path, digest, location=None):
-        self._exit(self._nr.run(
+        self._W(self._nr.run(
             task=md5sum,
-            path=path,
+            local_path=path,
             digest=digest,
             location=location))
 
     def mkdir(self, path, location=None):
-        self._exit(self._nr.run(
+        self._W(self._nr.run(
             task=mkdir,
-            path=path,
+            local_path=path,
             location=location))
 
     def delete(self, path, location=None):
-        self._exit(self._nr.run(
+        self._W(self._nr.run(
             task=delete,
-            path=path,
+            local_path=path,
             location=location))
 
     def rmdir(self, path, location=None):
-        self._exit(self._nr.run(
+        self._W(self._nr.run(
             task=rmdir,
-            path=path,
+            local_path=path,
             location=location))
 
 if __name__ == '__main__':

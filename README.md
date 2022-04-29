@@ -1,4 +1,4 @@
-# iosxr-ftp-mget
+# iosxr-mget
 Cisco IOS-XR装置にFTPサーバーからファイルをダウンロードするためのプロビジョニングツール。
 
 ## 使い方
